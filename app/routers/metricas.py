@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query
+from app.core.auth import get_current_user
 from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
 from app.models.tarea import Tarea
@@ -14,7 +15,7 @@ def get_db():
         db.close()
 
 @router.get("/proyectos/{id}/metricas")
-def metricas_proyecto(id: int, db: Session = Depends(get_db)):
+def metricas_proyecto(id: int, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     tareas = db.query(Tarea).filter(Tarea.id_proyecto == id).all()
 
     # Cycle Time (en minutos)
@@ -34,8 +35,6 @@ def metricas_proyecto(id: int, db: Session = Depends(get_db)):
     # Tareas pendientes
     tareas_pendientes = len([t for t in tareas if not t.started_at and not t.completed_at])
 
-    # Tareas archivadas
-    tareas_archivadas = len([t for t in tareas if t.archived_at])
 
     # Entregas a tiempo/tarde
     entregas_a_tiempo = 0
@@ -53,7 +52,6 @@ def metricas_proyecto(id: int, db: Session = Depends(get_db)):
         "tareas_completadas": tareas_completadas,
         "tareas_en_progreso": tareas_en_progreso,
         "tareas_pendientes": tareas_pendientes,
-        "tareas_archivadas": tareas_archivadas,
         "entregas_a_tiempo": entregas_a_tiempo,
         "entregas_tarde": entregas_tarde
     }
