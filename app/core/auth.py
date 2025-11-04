@@ -2,6 +2,7 @@ import os
 from fastapi import Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
+from app.models.models import User
 
 # Usar el mismo secret y algoritmo que el backend PHP
 JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key")
@@ -20,7 +21,7 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
     if not auth_header or not auth_header.lower().startswith("token "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token no proporcionado")
     token = auth_header[6:]  # Quita "Token "
-    from jose import jwt as jose_jwt
+    from jose import jwt as jose_jwt, JWTError, ExpiredSignatureError
     try:
         payload = jose_jwt.decode(
             token,
@@ -29,16 +30,15 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
             options={"require": ["exp", "iat"]},
             issuer=APP_URL
         )
-    except jose_jwt.ExpiredSignatureError:
+    except ExpiredSignatureError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expirado")
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido")
-    # Buscar usuario por username (sub)
-    # user = db.query(User).filter_by(username=payload["sub"]).first()
-    # if not user:
-    #     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario no encontrado")
-    # return user
-    return payload  # Si no tienes modelo User, retorna el payload
+    except JWTError as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Error JWT: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Error desconocido: {str(e)}")
+    # Buscar usuario por id_usuario (conversión a int)
+    user_id = int(payload["sub"])
+    return user_id
 """
 Manejo básico de autenticación JWT.
 Incluye funciones para crear y verificar tokens.
