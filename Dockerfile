@@ -13,9 +13,16 @@ WORKDIR /app
 COPY requirements.txt .
 COPY .env .
 
-# Instalar dependencias
-RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+# Instalar dependencias del sistema (necesarias para conectores MySQL si se usan)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        default-libmysqlclient-dev \
+        build-essential \
+    && pip install --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt \
+    && apt-get remove -y build-essential \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copiar el código fuente
 COPY ./app ./app

@@ -16,10 +16,9 @@ class Tarea(Base):
     due_at = Column(DateTime, nullable=True)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
-    archived_at = Column(DateTime, nullable=True)
     status = Column(String(1), default='0')
     prioridad = Column(String(50), nullable=True)
-    color = Column(String(50), nullable=True)
+    # color field removed
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
     proyecto = relationship("Proyecto", back_populates="tareas")

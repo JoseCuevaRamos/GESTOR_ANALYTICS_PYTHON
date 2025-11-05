@@ -10,10 +10,9 @@ class TareaSchema(BaseModel):
     created_at: Optional[datetime]
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
-    archived_at: Optional[datetime]
     due_at: Optional[datetime]
 
-    @field_validator('created_at', 'started_at', 'completed_at', 'archived_at', 'due_at', mode='before')
+    @field_validator('created_at', 'started_at', 'completed_at', 'due_at', mode='before')
     def dt_to_str(cls, v):
         if isinstance(v, datetime):
             return v.isoformat()
