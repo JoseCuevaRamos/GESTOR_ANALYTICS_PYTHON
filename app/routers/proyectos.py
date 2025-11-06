@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
 from app.models.proyecto import Proyecto
 from app.schemas.proyecto import ProyectosResponse, ProyectoSchema
+from app.core.auth import get_current_user  # <-- dependencia de autenticación
 
 router = APIRouter()
 
@@ -17,7 +18,12 @@ def get_db():
         db.close()
 
 @router.get("/espacios/{id}/proyectos", response_model=ProyectosResponse)
-def listar_proyectos(id: int, id_usuario: int = Query(0), db: Session = Depends(get_db)):
+def listar_proyectos(
+    id: int,
+    id_usuario: int = Query(0),
+    db: Session = Depends(get_db),
+    current_user: int = Depends(get_current_user)  # <-- requiere JWT (no uso del valor aquí)
+):
     """Listar proyectos de un espacio, filtrados por usuario si se proporciona."""
     # Si NO se proporciona id_usuario, devolver TODOS los proyectos activos
     if id_usuario == 0:
