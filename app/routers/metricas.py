@@ -18,50 +18,76 @@ def get_db():
 
 @router.get("/proyectos/{id}/metricas")
 def metricas_proyecto(id: int, db: Session = Depends(get_db)):
-    tareas = db.query(Tarea).filter(Tarea.id_proyecto == id).all()
+    # FUENTE DE VERDAD: columna.status_fijas (NO completed_at ni started_at)
+    # Según documentación PHP:
+    # - status_fijas='1' = En Progreso
+    # - status_fijas='2' = Finalizado
+    # - status_fijas=NULL = Columnas normales (Pendientes)
+    # - id_columna NUNCA es NULL (garantizado por BD)
+    
+    # Filtrar solo tareas activas en columnas activas
+    tareas = db.query(Tarea)\
+        .join(Columna, Tarea.id_columna == Columna.id_columna)\
+        .filter(
+            Tarea.id_proyecto == id,
+            Tarea.status == '0',      # Tareas no eliminadas
+            Columna.status == '0'      # Columnas no eliminadas
+        ).all()
 
-    # Intentar leer columnas y mapear id_columna -> status_fijas. Si la tabla
-    # `columnas` no existe o hay un error, hacemos fallback a la lógica previa
-    # que considera completed_at/started_at.
+    # Mapear columnas: id_columna -> status_fijas
+    # status_fijas es STRING: '1', '2' o NULL (NO existe '0')
     columnas_map = {}
     try:
-        columnas = db.query(Columna).all()
+        columnas = db.query(Columna).filter(Columna.status == '0').all()
         columnas_map = {c.id_columna: c.status_fijas for c in columnas}
     except Exception:
-        # fallback: columnas_map vacío -> se usará la lógica por timestamps
         columnas_map = {}
 
-    # Cycle Time (en minutos)
-    cycle_times = [ (t.completed_at - t.started_at).total_seconds() / 60 for t in tareas if t.started_at and t.completed_at ]
+    # Cycle Time: tiempo desde started_at hasta completed_at (solo si ambos existen)
+    cycle_times = [
+        (t.completed_at - t.started_at).total_seconds() / 60 
+        for t in tareas 
+        if t.started_at and t.completed_at
+    ]
     avg_cycle_time = int(sum(cycle_times) / len(cycle_times)) if cycle_times else 0
 
-    # Lead Time (en minutos)
-    lead_times = [ (t.completed_at - t.created_at).total_seconds() / 60 for t in tareas if t.created_at and t.completed_at ]
+    # Lead Time: tiempo desde created_at hasta completed_at
+    lead_times = [
+        (t.completed_at - t.created_at).total_seconds() / 60 
+        for t in tareas 
+        if t.created_at and t.completed_at
+    ]
     avg_lead_time = int(sum(lead_times) / len(lead_times)) if lead_times else 0
 
-    # Tareas completadas
-    if columnas_map:
-        # Contar como completada si su columna apunta a status_fijas = '2'
-        tareas_completadas = len([t for t in tareas if t.id_columna and columnas_map.get(t.id_columna) == '2'])
-    else:
-        # Fallback: considerar completada si tiene completed_at
-        tareas_completadas = len([t for t in tareas if t.completed_at])
+    # CLASIFICACIÓN BASADA EN columna.status_fijas (FUENTE DE VERDAD)
+    tareas_completadas = len([
+        t for t in tareas 
+        if columnas_map.get(t.id_columna) == '2'  # STRING '2', NO int
+    ])
+    
+    tareas_en_progreso = len([
+        t for t in tareas 
+        if columnas_map.get(t.id_columna) == '1'  # STRING '1', NO int
+    ])
+    
+    # Tareas pendientes: columnas con status_fijas=NULL (columnas normales)
+    tareas_pendientes = len([
+        t for t in tareas 
+        if columnas_map.get(t.id_columna) is None  # NULL, NO '0'
+    ])
 
-    # Tareas en progreso
-    if columnas_map:
-        tareas_en_progreso = len([t for t in tareas if t.id_columna and columnas_map.get(t.id_columna) == '1'])
-    else:
-        tareas_en_progreso = len([t for t in tareas if t.started_at and not t.completed_at])
+    # VALIDACIÓN DE CONSISTENCIA: La suma debe ser igual al total
+    total_tareas = len(tareas)
+    suma_verificacion = tareas_completadas + tareas_en_progreso + tareas_pendientes
+    
+    # Si hay inconsistencia, ajustar para evitar porcentajes > 100%
+    if suma_verificacion != total_tareas:
+        # Registrar warning (en producción usar logging)
+        print(f"⚠️ INCONSISTENCIA en proyecto {id}: {tareas_completadas} + {tareas_en_progreso} + {tareas_pendientes} = {suma_verificacion} != {total_tareas}")
+        # Recalcular pendientes como diferencia
+        tareas_pendientes = max(0, total_tareas - tareas_completadas - tareas_en_progreso)
 
-    # Tareas pendientes
-    if columnas_map:
-        tareas_pendientes = len([t for t in tareas if (t.id_columna is None) or (columnas_map.get(t.id_columna) is None)])
-    else:
-        tareas_pendientes = len([t for t in tareas if not t.started_at and not t.completed_at])
-
-    # Note: archived_at field removed from Tarea model; archived count omitted
-
-    # Entregas a tiempo/tarde
+    # Entregas a tiempo/tarde (solo tareas completadas con fecha límite)
     entregas_a_tiempo = 0
     entregas_tarde = 0
     for t in tareas:
@@ -71,30 +97,18 @@ def metricas_proyecto(id: int, db: Session = Depends(get_db)):
             else:
                 entregas_tarde += 1
 
-    # Total de tareas activas (status='0' significa tarea no eliminada)
-    total_tareas = len([t for t in tareas if t.status == '0'])
-
     # Tareas asignadas (tienen id_asignado)
-    tareas_asignadas = len([t for t in tareas if t.id_asignado is not None and t.status == '0'])
+    tareas_asignadas = len([t for t in tareas if t.id_asignado is not None])
 
     # Velocidad: Tareas completadas en últimos 14 días / 14
+    # Usar columna.status_fijas='2' Y completed_at (ambas condiciones)
     fecha_inicio_velocidad = datetime.now() - timedelta(days=14)
-    if columnas_map:
-        tareas_completadas_recientes = len([
-            t for t in tareas 
-            if t.id_columna 
-            and columnas_map.get(t.id_columna) == '2'
-            and t.completed_at 
-            and t.completed_at >= fecha_inicio_velocidad
-            and t.status == '0'
-        ])
-    else:
-        tareas_completadas_recientes = len([
-            t for t in tareas 
-            if t.completed_at 
-            and t.completed_at >= fecha_inicio_velocidad
-            and t.status == '0'
-        ])
+    tareas_completadas_recientes = len([
+        t for t in tareas 
+        if columnas_map.get(t.id_columna) == '2'  # En columna Finalizado
+        and t.completed_at  # Tiene fecha de completado
+        and t.completed_at >= fecha_inicio_velocidad  # En últimos 14 días
+    ])
     velocidad = round(tareas_completadas_recientes / 14, 2) if tareas_completadas_recientes > 0 else 0.0
 
     # Miembros activos: COUNT(DISTINCT id_usuario) de usuarios_roles WHERE status='0'
@@ -108,11 +122,13 @@ def metricas_proyecto(id: int, db: Session = Depends(get_db)):
         # Fallback si la tabla usuarios_roles no existe
         miembros_activos = 0
 
-    # Rendimiento del equipo: Ponderado para Kanban/Trello
+    # Rendimiento del equipo: Ponderado para Kanban
     # Completadas = 100%, En Progreso = 50%, Pendientes = 0%
     if total_tareas > 0:
         progreso_ponderado = (tareas_completadas * 1.0) + (tareas_en_progreso * 0.5)
-        rendimiento_porcentaje = round((progreso_ponderado / total_tareas) * 100, 1)
+        rendimiento_porcentaje = (progreso_ponderado / total_tareas) * 100
+        # LIMITAR entre 0-100% para prevenir inconsistencias
+        rendimiento_porcentaje = min(max(round(rendimiento_porcentaje, 1), 0.0), 100.0)
     else:
         rendimiento_porcentaje = 0.0
 
