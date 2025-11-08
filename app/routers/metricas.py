@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.core.database import SessionLocal
+from app.core.auth import get_current_user
 from app.models.tarea import Tarea
 from app.models.columna import Columna
 from app.models.usuario_rol import UsuarioRol
@@ -25,10 +26,15 @@ def format_time(seconds):
     return f"{minutes}:{secs:02d}"
 
 @router.get("/proyectos/{id}/metricas")
-def metricas_proyecto(id: int, db: Session = Depends(get_db)):
+def metricas_proyecto(id: int, db: Session = Depends(get_db), user = Depends(get_current_user)):
     print("\n" + "="*80)
     print(f"CALCULANDO MÉTRICAS PARA PROYECTO {id}")
     print("="*80)
+    # Mostrar info del usuario autenticado (puede ser user_id o un objeto User)
+    try:
+        print(f"Usuario autenticado: {user}")
+    except Exception:
+        pass
     
     tareas = db.query(Tarea)\
         .join(Columna, Tarea.id_columna == Columna.id_columna)\
