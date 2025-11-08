@@ -1,0 +1,16 @@
+# Ignorar entornos virtuales
+venv/
+.venv/
+
+# Ignorar cachés de Python
+__pycache__/
+*.py[cod]
+
+# Ignorar variables de entorno
+.env
+*.env
+
+# Archivos de distribución
+build/
+dist/
+*.egg-info/

@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, func
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
-
+from app.models.proyecto import Proyecto  
 class Tarea(Base):
     __tablename__ = "tareas"
     id_tarea = Column(Integer, primary_key=True, autoincrement=True)
@@ -18,10 +18,7 @@ class Tarea(Base):
     completed_at = Column(DateTime, nullable=True)
     status = Column(String(1), default='0')
     prioridad = Column(String(50), nullable=True)
-    # color field removed
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
     proyecto = relationship("Proyecto", back_populates="tareas")
-
-# Import Proyecto at the end to resolve circular reference
 

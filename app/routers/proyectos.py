@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
 from app.models.proyecto import Proyecto
 from app.schemas.proyecto import ProyectosResponse, ProyectoSchema
-
+from typing import List
 router = APIRouter()
 
 def get_db():

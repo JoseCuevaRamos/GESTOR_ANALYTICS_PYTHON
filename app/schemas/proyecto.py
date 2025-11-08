@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from typing import Optional
 from pydantic import BaseModel, field_validator
 from datetime import datetime
+from typing import List
 
 class ProyectoSchema(BaseModel):
     id_proyecto: int
@@ -26,5 +27,5 @@ class ProyectoSchema(BaseModel):
         orm_mode = True
 
 class ProyectosResponse(BaseModel):
-    proyecto: list[ProyectoSchema]
+    proyecto: List[ProyectoSchema]
     proyectoCount: int
