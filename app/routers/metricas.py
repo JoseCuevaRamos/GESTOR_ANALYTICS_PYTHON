@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.core.database import SessionLocal
@@ -18,23 +18,14 @@ def get_db():
         db.close()
 
 def format_time(seconds):
-    """Convierte segundos a formato mm:ss"""
+    """Convierte segundos a horas"""
     if not seconds or seconds <= 0:
-        return "0:00"
-    minutes = int(seconds // 60)
-    secs = int(seconds % 60)
-    return f"{minutes}:{secs:02d}"
+        return 0
+    hours = seconds / 3600
+    return round(hours)
 
 @router.get("/proyectos/{id}/metricas")
 def metricas_proyecto(id: int, db: Session = Depends(get_db), user = Depends(get_current_user)):
-    print("\n" + "="*80)
-    print(f"CALCULANDO MÉTRICAS PARA PROYECTO {id}")
-    print("="*80)
-    # Mostrar info del usuario autenticado (puede ser user_id o un objeto User)
-    try:
-        print(f"Usuario autenticado: {user}")
-    except Exception:
-        pass
     
     tareas = db.query(Tarea)\
         .join(Columna, Tarea.id_columna == Columna.id_columna)\
@@ -43,27 +34,14 @@ def metricas_proyecto(id: int, db: Session = Depends(get_db), user = Depends(get
             Tarea.status == '0',
             Columna.status == '0'
         ).all()
-    
-    print(f"\nTareas filtradas (status='0'): {len(tareas)}")
-    for t in tareas:
-        print(f"  - ID: {t.id_tarea}, Título: {t.titulo}, Status: '{t.status}'")
-    print(f"\nDEBUG QUERY: Buscando columnas donde id_proyecto={id} y status='0'")
 
     columnas = db.query(Columna)\
         .filter(Columna.id_proyecto == id, Columna.status == '0')\
         .all()
 
-    # CREAR columnas_map AQUÍ (fuera del loop)
     columnas_map = {c.id_columna: c.status_fijas for c in columnas}
-    
-    print(f"🔍 RESULTADO: {len(columnas)} columnas encontradas")
 
-    for c in columnas:
-        print(f"  - ID: {c.id_columna}, Nombre: {c.nombre}, id_proyecto: {c.id_proyecto}, status_fijas: {c.status_fijas}")
-
-    print(f"📋 Columnas mapeadas: {columnas_map}")
-
-    # cycle_times AFUERA del loop
+    # Cycle Time
     cycle_times = []
     for t in tareas:
         if t.started_at and t.completed_at:
@@ -71,16 +49,9 @@ def metricas_proyecto(id: int, db: Session = Depends(get_db), user = Depends(get
             if diff_seconds > 0:
                 cycle_times.append(diff_seconds)
     
-    # Convertir a formato mm:ss
-    if cycle_times:
-        avg_cycle_time_seconds = sum(cycle_times) / len(cycle_times)
-        avg_cycle_time_formatted = format_time(avg_cycle_time_seconds)
-    else:
-        avg_cycle_time_seconds = 0
-        avg_cycle_time_formatted = "0:00"
-    
-    print(f"⏱️  Cycle Time: {len(cycle_times)} tareas, promedio {avg_cycle_time_formatted}")
+    avg_cycle_time = format_time(sum(cycle_times) / len(cycle_times)) if cycle_times else 0
 
+    # Lead Time
     lead_times = []
     for t in tareas:
         if t.created_at and t.completed_at:
@@ -88,34 +59,15 @@ def metricas_proyecto(id: int, db: Session = Depends(get_db), user = Depends(get
             if diff_seconds > 0:
                 lead_times.append(diff_seconds)
     
-    # Convertir a formato mm:ss
-    if lead_times:
-        avg_lead_time_seconds = sum(lead_times) / len(lead_times)
-        avg_lead_time_formatted = format_time(avg_lead_time_seconds)
-    else:
-        avg_lead_time_seconds = 0
-        avg_lead_time_formatted = "0:00"
-    
-    print(f" Lead Time: {len(lead_times)} tareas, promedio {avg_lead_time_formatted}")
+    avg_lead_time = format_time(sum(lead_times) / len(lead_times)) if lead_times else 0
 
-    tareas_completadas = len([
-        t for t in tareas 
-        if columnas_map.get(t.id_columna) == '2'
-    ])
-    
-    tareas_en_progreso = len([
-        t for t in tareas 
-        if columnas_map.get(t.id_columna) == '1'
-    ])
-    
-    tareas_pendientes = len([
-        t for t in tareas 
-        if columnas_map.get(t.id_columna) is None
-    ])
-
+    # Conteo de tareas
+    tareas_completadas = len([t for t in tareas if columnas_map.get(t.id_columna) == '2'])
+    tareas_en_progreso = len([t for t in tareas if columnas_map.get(t.id_columna) == '1'])
+    tareas_pendientes = len([t for t in tareas if columnas_map.get(t.id_columna) is None])
     total_tareas = len(tareas)
-    print(f"\nCONTEO: Completas={tareas_completadas}, Progreso={tareas_en_progreso}, Pendientes={tareas_pendientes}, Total={total_tareas}")
 
+    # Entregas
     entregas_a_tiempo = 0
     entregas_tarde = 0
     for t in tareas:
@@ -125,40 +77,20 @@ def metricas_proyecto(id: int, db: Session = Depends(get_db), user = Depends(get
             else:
                 entregas_tarde += 1
 
+    # Tareas asignadas
     tareas_asignadas = len([t for t in tareas if t.id_asignado is not None])
 
-    fecha_inicio_velocidad = datetime.now() - timedelta(days=14)
-    tareas_completadas_recientes = []
-    for t in tareas:
-        if (columnas_map.get(t.id_columna) == '2' and 
-            t.completed_at and 
-            t.completed_at >= fecha_inicio_velocidad):
-            tareas_completadas_recientes.append(t)
-    
-    velocidad = round(len(tareas_completadas_recientes) / 14, 2) if len(tareas_completadas_recientes) > 0 else 0.0
-
-    try:
-        miembros_activos = db.query(func.count(func.distinct(UsuarioRol.id_usuario)))\
-            .filter(
-                UsuarioRol.id_proyecto == id,
-                UsuarioRol.status == '0'
-            ).scalar() or 0
-    except Exception as e:
-        miembros_activos = 0
-
+    # Rendimiento porcentaje
     if total_tareas > 0:
         progreso_ponderado = (tareas_completadas * 1.0) + (tareas_en_progreso * 0.5)
         rendimiento_porcentaje = (progreso_ponderado / total_tareas) * 100
         rendimiento_porcentaje = min(max(round(rendimiento_porcentaje, 1), 0.0), 100.0)
     else:
         rendimiento_porcentaje = 0.0
-    
-    print(f"\n📈 Rendimiento: {rendimiento_porcentaje}%")
-    print("="*80 + "\n")
 
     return {
-        "cycle_time_promedio": avg_cycle_time_formatted,  
-        "lead_time_promedio": avg_lead_time_formatted,    
+        "cycle_time_promedio": avg_cycle_time,
+        "lead_time_promedio": avg_lead_time,
         "tareas_completadas": tareas_completadas,
         "tareas_en_progreso": tareas_en_progreso,
         "tareas_pendientes": tareas_pendientes,
@@ -166,7 +98,122 @@ def metricas_proyecto(id: int, db: Session = Depends(get_db), user = Depends(get
         "entregas_tarde": entregas_tarde,
         "total_tareas": total_tareas,
         "tareas_asignadas": tareas_asignadas,
-        "velocidad": velocidad,
-        "miembros_activos": miembros_activos,
         "rendimiento_porcentaje": rendimiento_porcentaje
     }
+
+
+@router.get("/proyectos/{id}/burndown")
+def burndown_chart(id: int, db: Session = Depends(get_db), user = Depends(get_current_user)):
+    """Genera datos para Burndown Chart - Solo lo necesario para el gráfico"""
+    try:
+        # Obtener tareas activas
+        tareas = db.query(Tarea)\
+            .join(Columna, Tarea.id_columna == Columna.id_columna)\
+            .filter(
+                Tarea.id_proyecto == id,
+                Tarea.status == '0',
+                Columna.status == '0'
+            ).all()
+        
+        if not tareas:
+            return {
+                'progreso_diario': [],
+                'linea_ideal': []
+            }
+        
+        # Obtener columnas
+        columnas = db.query(Columna)\
+            .filter(Columna.id_proyecto == id, Columna.status == '0')\
+            .all()
+        
+        columnas_map = {c.id_columna: c.status_fijas for c in columnas}
+        
+        # Calcular horas totales (24 horas por tarea por defecto)
+        HORAS_POR_TAREA_DEFAULT = 24
+        total_horas_estimadas = 0
+        
+        for t in tareas:
+            tiempo = HORAS_POR_TAREA_DEFAULT
+            if hasattr(t, 'tiempo_estimado') and t.tiempo_estimado:
+                tiempo = t.tiempo_estimado
+            elif hasattr(t, 'estimated_time') and t.estimated_time:
+                tiempo = t.estimated_time
+            total_horas_estimadas += tiempo
+        
+        HORAS_POR_DIA = 24
+        total_dias_estimados = round(total_horas_estimadas / HORAS_POR_DIA, 2)
+        
+        # Fecha de inicio
+        fechas_creacion = [t.created_at for t in tareas if t.created_at]
+        fecha_inicio = min(fechas_creacion) if fechas_creacion else datetime.now()
+        
+        # Agrupar tareas completadas por fecha
+        tareas_completadas_por_fecha = {}
+        
+        for t in tareas:
+            if t.completed_at and columnas_map.get(t.id_columna) == '2':
+                fecha_key = t.completed_at.date()
+                
+                tiempo_tarea = HORAS_POR_TAREA_DEFAULT
+                if hasattr(t, 'tiempo_estimado') and t.tiempo_estimado:
+                    tiempo_tarea = t.tiempo_estimado
+                elif hasattr(t, 'estimated_time') and t.estimated_time:
+                    tiempo_tarea = t.estimated_time
+                
+                if fecha_key not in tareas_completadas_por_fecha:
+                    tareas_completadas_por_fecha[fecha_key] = {
+                        'tareas_count': 0,
+                        'horas_completadas': 0
+                    }
+                
+                tareas_completadas_por_fecha[fecha_key]['tareas_count'] += 1
+                tareas_completadas_por_fecha[fecha_key]['horas_completadas'] += tiempo_tarea
+        
+        # Generar progreso diario
+        progreso_diario = []
+        fecha_actual = fecha_inicio.date()
+        fecha_hoy = datetime.now().date()
+        dias_restantes = total_dias_estimados
+        horas_restantes = total_horas_estimadas
+        dia_indice = 0
+        
+        while fecha_actual <= fecha_hoy:
+            if fecha_actual in tareas_completadas_por_fecha:
+                horas_completadas_dia = tareas_completadas_por_fecha[fecha_actual]['horas_completadas']
+                horas_restantes -= horas_completadas_dia
+                dias_restantes = round(horas_restantes / HORAS_POR_DIA, 2)
+            
+            progreso_diario.append({
+                'dia': dia_indice,
+                'fecha': fecha_actual.isoformat(),
+                'dias_restantes': max(dias_restantes, 0),
+                'tareas_completadas_dia': tareas_completadas_por_fecha.get(fecha_actual, {}).get('tareas_count', 0)
+            })
+            
+            fecha_actual += timedelta(days=1)
+            dia_indice += 1
+        
+        # Calcular línea ideal
+        duracion_total_dias = dia_indice
+        linea_ideal = []
+        
+        if duracion_total_dias > 0:
+            decremento_diario = total_dias_estimados / duracion_total_dias
+            
+            for i in range(duracion_total_dias + 1):
+                dias_ideales_restantes = round(total_dias_estimados - (decremento_diario * i), 2)
+                linea_ideal.append({
+                    'dia': i,
+                    'dias_restantes': max(dias_ideales_restantes, 0)
+                })
+        
+        return {
+            'progreso_diario': progreso_diario,
+            'linea_ideal': linea_ideal
+        }
+        
+    except Exception as e:
+        print(f" ERROR en burndown_chart: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
