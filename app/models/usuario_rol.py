@@ -13,3 +13,10 @@ class UsuarioRol(Base):
     status = Column(Enum('0', '1', name='usuarios_roles_status_enum'), default='0')
     created_at = Column(DateTime)
     updated_at = Column(DateTime)
+
+    # Relaciones (inspiradas en el modelo PHP):
+    # - `usuario` debe emparejar con `usuarios_roles` en el modelo Usuario
+    # - `proyecto` es conveniente para acceder al proyecto relacionado
+    # No añadimos `rol` ni `espacio` como relaciones si esos modelos no existen aún.
+    usuario = relationship("Usuario", back_populates="usuarios_roles")
+    proyecto = relationship("Proyecto", primaryjoin="UsuarioRol.id_proyecto==Proyecto.id_proyecto")

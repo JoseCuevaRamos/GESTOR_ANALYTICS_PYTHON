@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.core.database import SessionLocal
@@ -35,6 +35,23 @@ def metricas_proyecto(id: int, db: Session = Depends(get_db), user = Depends(get
         print(f"Usuario autenticado: {user}")
     except Exception:
         pass
+
+    # Verificar que el usuario es líder del proyecto (id_rol == 1)
+    def _is_project_leader(user_obj, proyecto_id, db_session: Session):
+        try:
+            user_id = user_obj.id_usuario if hasattr(user_obj, 'id_usuario') else int(user_obj)
+        except Exception:
+            return False
+        rol = db_session.query(UsuarioRol).filter(
+            UsuarioRol.id_proyecto == proyecto_id,
+            UsuarioRol.id_usuario == user_id,
+            UsuarioRol.id_rol == 1,
+            UsuarioRol.status == '0'
+        ).first()
+        return rol is not None
+
+    if not _is_project_leader(user, id, db):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Se requiere ser líder del proyecto para acceder a esta ruta")
     
     tareas = db.query(Tarea)\
         .join(Columna, Tarea.id_columna == Columna.id_columna)\

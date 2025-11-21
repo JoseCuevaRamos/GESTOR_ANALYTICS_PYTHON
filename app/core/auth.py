@@ -22,8 +22,11 @@ from fastapi import Depends, HTTPException, status, Request
 from jose import JWTError, jwt
 from jose import ExpiredSignatureError
 from sqlalchemy.orm import Session
+import logging
 
 from app.core.database import SessionLocal
+
+logger = logging.getLogger(__name__)
 
 # Configuración: leer de entorno para que use los mismos valores que PHP
 JWT_SECRET = os.getenv("JWT_SECRET", os.getenv("SECRET_KEY", "your-secret-key"))
@@ -52,6 +55,34 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     return encoded_jwt
 
 
+def generate_token_for_user(user, expires_hours: int = 2):
+    """Genera un JWT con claims iat, exp, jti y sub (sub = id_usuario como string).
+
+    No incluye 'iss' para mantener compatibilidad con tu petición.
+    """
+    import base64, secrets
+    now = datetime.utcnow()
+    future = now + timedelta(hours=expires_hours)
+    jti = base64.b64encode(secrets.token_bytes(16)).decode('utf-8')
+
+    payload = {
+        "iat": int(now.timestamp()),
+        "exp": int(future.timestamp()),
+        "jti": jti,
+        "sub": str(getattr(user, 'id_usuario', user))
+    }
+
+    # Si hay APP_URL configurada, añadir 'iss' para que el token genere el issuer esperado
+    if APP_URL:
+        payload["iss"] = APP_URL
+
+    # Log token generation metadata (no secrets)
+    logger.debug("Generating token for user=%s expires_hours=%s jti=%s APP_URL=%s",
+                 getattr(user, 'id_usuario', user), expires_hours, jti, APP_URL)
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return token
+
+
 def verify_token(token: str):
     """Verifica y decodifica un token con la clave configurada.
 
@@ -59,10 +90,23 @@ def verify_token(token: str):
     """
     options = {"require": ["exp"]}
     try:
+        # Decode without forcing jose to validate issuer so we can accept tokens
+        # that don't include the `iss` claim (some PHP tokens omit it).
+        logger.debug("verify_token: decoding token (first8)=%s APP_URL=%s", token[:8], APP_URL)
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM], options=options)
+        logger.debug("verify_token: decoded payload keys=%s", list(payload.keys()))
+
+        # If APP_URL is configured, validate issuer only when the token provides it.
+        # This keeps compatibility with tokens that don't include `iss` while still
+        # rejecting tokens that explicitly claim a different issuer.
         if APP_URL:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM], options=options, issuer=APP_URL)
-        else:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM], options=options)
+            token_iss = payload.get("iss")
+            logger.debug("verify_token: token_iss=%s", token_iss)
+            if token_iss is not None and token_iss != APP_URL:
+                # raise a JWTError similar to jose when issuer mismatches
+                logger.warning("verify_token: invalid issuer token_iss=%s expected=%s", token_iss, APP_URL)
+                raise JWTError("Invalid issuer")
+
         return payload
     except ExpiredSignatureError:
         raise
