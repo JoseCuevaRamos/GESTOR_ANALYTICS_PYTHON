@@ -30,6 +30,7 @@ app.include_router(proyectos.router)
 app.include_router(metricas.router)
 app.include_router(auth_router.router)
 
+
 @app.get("/health")
 def health_check():
     """Endpoint de prueba para verificar el estado de la API."""
