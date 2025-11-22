@@ -16,8 +16,25 @@ DB_PORT = os.getenv("ANALYTICS_DB_PORT") or os.getenv("DB_PORT", "3306")
 
 DATABASE_URL = f"mysql+pymysql://{DB_USERNAME}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_DATABASE}"
 
-# Create engine and session
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+# Habilitar SSL/TLS automáticamente si el host contiene 'tidb'.
+# Si se proporciona DB_SSL_CA (ruta o contenido del cert), se usará como CA.
+connect_args = {}
+if 'tidb' in (DB_HOST or '').lower():
+	db_ssl_ca = os.getenv('DB_SSL_CA', '').strip()
+	if db_ssl_ca:
+		# Si DB_SSL_CA apunta a un archivo en el contenedor o contiene PEM, usarlo.
+		connect_args = {"ssl": {"ca": db_ssl_ca}}
+	else:
+		# Activar SSL aunque no se pase CA explícita; en muchos entornos cloud
+		# esto fuerza TLS. En producción es preferible pasar DB_SSL_CA.
+		connect_args = {"ssl": {}}
+
+# Create engine and session (pasar connect_args si corresponde)
+if connect_args:
+	engine = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args=connect_args)
+else:
+	engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Definición de Base para modelos SQLAlchemy
