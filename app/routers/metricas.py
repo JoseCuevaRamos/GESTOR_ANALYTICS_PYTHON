@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.core.database import SessionLocal
@@ -6,6 +6,7 @@ from app.models.tarea import Tarea
 from app.models.columna import Columna
 from app.models.usuario_rol import UsuarioRol
 from app.models.historial_movimiento import HistorialMovimiento
+from app.core.auth import get_current_user
 from datetime import datetime, timedelta, date
 from typing import Dict, List
 
@@ -19,7 +20,11 @@ def get_db():
         db.close()
 
 @router.get("/proyectos/{id}/metricas")
-def metricas_proyecto(id: int, db: Session = Depends(get_db)):
+def metricas_proyecto(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
     """
     Endpoint para obtener las métricas generales del proyecto.
     Tiempos calculados en DÍAS con 2 decimales.
@@ -27,6 +32,22 @@ def metricas_proyecto(id: int, db: Session = Depends(get_db)):
     print(f"\n{'='*60}")
     print(f"🔍 CALCULANDO MÉTRICAS PARA PROYECTO {id}")
     print(f"{'='*60}")
+
+    def _is_project_leader(user_obj, proyecto_id, db_session: Session):
+        try:
+            user_id = user_obj.id_usuario if hasattr(user_obj, 'id_usuario') else int(user_obj)
+        except Exception:
+            return False
+        rol = db_session.query(UsuarioRol).filter(
+            UsuarioRol.id_proyecto == proyecto_id,
+            UsuarioRol.id_usuario == user_id,
+            UsuarioRol.id_rol == 1,
+            UsuarioRol.status == '0'
+        ).first()
+        return rol is not None
+
+    if not _is_project_leader(current_user, id, db):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Se requiere ser líder del proyecto para acceder a esta ruta")
     
     # Filtrar tareas activas del proyecto
     tareas = db.query(Tarea)\
@@ -192,10 +213,31 @@ def cfd_proyecto(
     from_date: str | None = Query(None, alias="from"),
     to_date: str | None = Query(None, alias="to"),
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     """
     Endpoint para obtener los datos del Cumulative Flow Diagram (CFD).
+    Solo accesible para usuarios con rol de líder (id_rol == 1) en el proyecto.
     """
+    def _is_project_leader(user_obj, proyecto_id, db_session: Session):
+        try:
+            user_id = user_obj.id_usuario if hasattr(user_obj, 'id_usuario') else int(user_obj)
+        except Exception:
+            return False
+        rol = db_session.query(UsuarioRol).filter(
+            UsuarioRol.id_proyecto == proyecto_id,
+            UsuarioRol.id_usuario == user_id,
+            UsuarioRol.id_rol == 1,
+            UsuarioRol.status == '0'
+        ).first()
+        return rol is not None
+
+    if not _is_project_leader(current_user, id_proyecto, db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Se requiere ser líder del proyecto para acceder al CFD",
+        )
+
     hoy = datetime.now().date()
 
     try:
