@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.core.database import SessionLocal
 from app.models.tarea import Tarea
 from app.models.columna import Columna
 from app.models.usuario_rol import UsuarioRol
-from datetime import datetime, timedelta
+from app.models.historial_movimiento import HistorialMovimiento
+from datetime import datetime, timedelta, date
+from typing import Dict, List
 
 router = APIRouter()
 
@@ -18,119 +20,155 @@ def get_db():
 
 @router.get("/proyectos/{id}/metricas")
 def metricas_proyecto(id: int, db: Session = Depends(get_db)):
-    # FUENTE DE VERDAD: columna.status_fijas (NO completed_at ni started_at)
-    # Según documentación PHP:
-    # - status_fijas='1' = En Progreso
-    # - status_fijas='2' = Finalizado
-    # - status_fijas=NULL = Columnas normales (Pendientes)
-    # - id_columna NUNCA es NULL (garantizado por BD)
+    """
+    Endpoint para obtener las métricas generales del proyecto.
+    Tiempos calculados en DÍAS con 2 decimales.
+    """
+    print(f"\n{'='*60}")
+    print(f"🔍 CALCULANDO MÉTRICAS PARA PROYECTO {id}")
+    print(f"{'='*60}")
     
-    # Filtrar solo tareas activas en columnas activas
+    # Filtrar tareas activas del proyecto
     tareas = db.query(Tarea)\
         .join(Columna, Tarea.id_columna == Columna.id_columna)\
         .filter(
             Tarea.id_proyecto == id,
-            Tarea.status == '0',      # Tareas no eliminadas
-            Columna.status == '0'      # Columnas no eliminadas
+            Tarea.status == '0',
+            Columna.status == '0'
         ).all()
 
-    # Mapear columnas: id_columna -> status_fijas
-    # status_fijas es STRING: '1', '2' o NULL (NO existe '0')
-    columnas_map = {}
+    print(f"📋 Total de tareas activas encontradas: {len(tareas)}")
+
+    # Filtrar columnas del proyecto
     try:
-        columnas = db.query(Columna).filter(Columna.status == '0').all()
+        columnas = db.query(Columna).filter(
+            Columna.status == '0',
+            Columna.id_proyecto == id
+        ).all()
         columnas_map = {c.id_columna: c.status_fijas for c in columnas}
-    except Exception:
+        print(f"📊 Columnas del proyecto: {len(columnas)}")
+        for col in columnas:
+            print(f"   - Col {col.id_columna}: {col.nombre} (status_fijas={col.status_fijas})")
+    except Exception as e:
+        print(f"❌ Error al cargar columnas: {e}")
         columnas_map = {}
 
-    # Cycle Time: tiempo desde started_at hasta completed_at (solo si ambos existen)
-    cycle_times = [
-        (t.completed_at - t.started_at).total_seconds() / 60 
-        for t in tareas 
-        if t.started_at and t.completed_at
-    ]
-    avg_cycle_time = int(sum(cycle_times) / len(cycle_times)) if cycle_times else 0
-
-    # Lead Time: tiempo desde created_at hasta completed_at
-    lead_times = [
-        (t.completed_at - t.created_at).total_seconds() / 60 
-        for t in tareas 
-        if t.created_at and t.completed_at
-    ]
-    avg_lead_time = int(sum(lead_times) / len(lead_times)) if lead_times else 0
-
-    # CLASIFICACIÓN BASADA EN columna.status_fijas (FUENTE DE VERDAD)
-    tareas_completadas = len([
-        t for t in tareas 
-        if columnas_map.get(t.id_columna) == '2'  # STRING '2', NO int
-    ])
+    # ✅ Cycle Time en DÍAS
+    print(f"\n⏱️  CALCULANDO CYCLE TIME...")
+    cycle_times = []
+    for t in tareas:
+        if t.started_at and t.completed_at:
+            delta_seconds = (t.completed_at - t.started_at).total_seconds()
+            dias = delta_seconds / (60 * 60 * 24)
+            cycle_times.append(dias)
+            print(f"   Tarea {t.id_tarea}: {t.started_at} → {t.completed_at} = {dias:.2f} días")
+        elif t.started_at:
+            print(f"   Tarea {t.id_tarea}: started_at OK pero completed_at es NULL")
+        elif t.completed_at:
+            print(f"   Tarea {t.id_tarea}: completed_at OK pero started_at es NULL")
     
-    tareas_en_progreso = len([
-        t for t in tareas 
-        if columnas_map.get(t.id_columna) == '1'  # STRING '1', NO int
-    ])
-    
-    # Tareas pendientes: columnas con status_fijas=NULL (columnas normales)
-    tareas_pendientes = len([
-        t for t in tareas 
-        if columnas_map.get(t.id_columna) is None  # NULL, NO '0'
-    ])
+    avg_cycle_time = round(sum(cycle_times) / len(cycle_times), 2) if cycle_times else 0.0
+    print(f"✅ Cycle Time Promedio: {avg_cycle_time} días ({len(cycle_times)} tareas con datos)")
 
-    # VALIDACIÓN DE CONSISTENCIA: La suma debe ser igual al total
+    # ✅ Lead Time en DÍAS
+    print(f"\n⏱️  CALCULANDO LEAD TIME...")
+    lead_times = []
+    for t in tareas:
+        if t.created_at and t.completed_at:
+            delta_seconds = (t.completed_at - t.created_at).total_seconds()
+            dias = delta_seconds / (60 * 60 * 24)
+            lead_times.append(dias)
+            print(f"   Tarea {t.id_tarea}: {t.created_at} → {t.completed_at} = {dias:.2f} días")
+        elif not t.completed_at:
+            print(f"   Tarea {t.id_tarea}: NO completada (completed_at es NULL)")
+    
+    avg_lead_time = round(sum(lead_times) / len(lead_times), 2) if lead_times else 0.0
+    print(f"✅ Lead Time Promedio: {avg_lead_time} días ({len(lead_times)} tareas con datos)")
+
+    # Clasificación basada en columna.status_fijas
+    print(f"\n📊 CLASIFICACIÓN DE TAREAS...")
+    tareas_completadas = len([t for t in tareas if columnas_map.get(t.id_columna) == '2'])
+    tareas_en_progreso = len([t for t in tareas if columnas_map.get(t.id_columna) == '1'])
+    tareas_pendientes = len([t for t in tareas if columnas_map.get(t.id_columna) is None])
+    
+    print(f"   ✅ Completadas (status_fijas='2'): {tareas_completadas}")
+    print(f"   🔄 En Progreso (status_fijas='1'): {tareas_en_progreso}")
+    print(f"   ⏳ Pendientes (status_fijas=NULL): {tareas_pendientes}")
+
+    # Validación de consistencia
     total_tareas = len(tareas)
     suma_verificacion = tareas_completadas + tareas_en_progreso + tareas_pendientes
     
-    # Si hay inconsistencia, ajustar para evitar porcentajes > 100%
     if suma_verificacion != total_tareas:
-        # Registrar warning (en producción usar logging)
-        print(f"⚠️ INCONSISTENCIA en proyecto {id}: {tareas_completadas} + {tareas_en_progreso} + {tareas_pendientes} = {suma_verificacion} != {total_tareas}")
-        # Recalcular pendientes como diferencia
+        print(f"⚠️  INCONSISTENCIA: {tareas_completadas} + {tareas_en_progreso} + {tareas_pendientes} = {suma_verificacion} != {total_tareas}")
         tareas_pendientes = max(0, total_tareas - tareas_completadas - tareas_en_progreso)
+        print(f"   Ajustando pendientes a: {tareas_pendientes}")
 
-    # Entregas a tiempo/tarde (solo tareas completadas con fecha límite)
+    # ✅ Entregas a tiempo/tarde
+    print(f"\n📅 CALCULANDO ENTREGAS A TIEMPO/TARDE...")
     entregas_a_tiempo = 0
     entregas_tarde = 0
+    tareas_con_fecha_limite = 0
+    
     for t in tareas:
         if t.completed_at and t.due_at:
+            tareas_con_fecha_limite += 1
             if t.completed_at <= t.due_at:
                 entregas_a_tiempo += 1
+                print(f"   ✅ Tarea {t.id_tarea}: A TIEMPO (completada {t.completed_at} <= límite {t.due_at})")
             else:
                 entregas_tarde += 1
+                diferencia = (t.completed_at - t.due_at).total_seconds() / (60 * 60 * 24)
+                print(f"   ⏰ Tarea {t.id_tarea}: TARDE (completada {t.completed_at} > límite {t.due_at}) +{diferencia:.1f} días")
+        else:
+            razon = []
+            if not t.completed_at:
+                razon.append("completed_at=NULL")
+            if not t.due_at:
+                razon.append("due_at=NULL")
+            print(f"   ⊘  Tarea {t.id_tarea}: SIN DATOS ({', '.join(razon)})")
+    
+    print(f"✅ Entregas a tiempo: {entregas_a_tiempo}")
+    print(f"⏰ Entregas tarde: {entregas_tarde}")
+    print(f"📊 Total tareas con fecha límite: {tareas_con_fecha_limite}")
 
-    # Tareas asignadas (tienen id_asignado)
+    # Tareas asignadas
     tareas_asignadas = len([t for t in tareas if t.id_asignado is not None])
+    print(f"\n👥 Tareas asignadas: {tareas_asignadas}/{total_tareas}")
 
-    # Velocidad: Tareas completadas en últimos 14 días / 14
-    # Usar columna.status_fijas='2' Y completed_at (ambas condiciones)
+    # Velocidad
     fecha_inicio_velocidad = datetime.now() - timedelta(days=14)
     tareas_completadas_recientes = len([
         t for t in tareas 
-        if columnas_map.get(t.id_columna) == '2'  # En columna Finalizado
-        and t.completed_at  # Tiene fecha de completado
-        and t.completed_at >= fecha_inicio_velocidad  # En últimos 14 días
+        if columnas_map.get(t.id_columna) == '2'
+        and t.completed_at
+        and t.completed_at >= fecha_inicio_velocidad
     ])
     velocidad = round(tareas_completadas_recientes / 14, 2) if tareas_completadas_recientes > 0 else 0.0
+    print(f"⚡ Velocidad: {velocidad} tareas/día (últimos 14 días: {tareas_completadas_recientes} tareas)")
 
-    # Miembros activos: COUNT(DISTINCT id_usuario) de usuarios_roles WHERE status='0'
+    # Miembros activos
     try:
         miembros_activos = db.query(func.count(func.distinct(UsuarioRol.id_usuario)))\
             .filter(
                 UsuarioRol.id_proyecto == id,
                 UsuarioRol.status == '0'
             ).scalar() or 0
-    except Exception:
-        # Fallback si la tabla usuarios_roles no existe
+        print(f"👥 Miembros activos: {miembros_activos}")
+    except Exception as e:
+        print(f"⚠️  Error al contar miembros: {e}")
         miembros_activos = 0
 
-    # Rendimiento del equipo: Ponderado para Kanban
-    # Completadas = 100%, En Progreso = 50%, Pendientes = 0%
+    # Rendimiento del equipo
     if total_tareas > 0:
         progreso_ponderado = (tareas_completadas * 1.0) + (tareas_en_progreso * 0.5)
         rendimiento_porcentaje = (progreso_ponderado / total_tareas) * 100
-        # LIMITAR entre 0-100% para prevenir inconsistencias
         rendimiento_porcentaje = min(max(round(rendimiento_porcentaje, 1), 0.0), 100.0)
     else:
         rendimiento_porcentaje = 0.0
+    
+    print(f"📊 Rendimiento del equipo: {rendimiento_porcentaje}%")
+    print(f"{'='*60}\n")
 
     return {
         "cycle_time_promedio": avg_cycle_time,
@@ -145,4 +183,112 @@ def metricas_proyecto(id: int, db: Session = Depends(get_db)):
         "velocidad": velocidad,
         "miembros_activos": miembros_activos,
         "rendimiento_porcentaje": rendimiento_porcentaje
+    }
+
+
+@router.get("/proyectos/{id_proyecto}/cfd")
+def cfd_proyecto(
+    id_proyecto: int,
+    from_date: str | None = Query(None, alias="from"),
+    to_date: str | None = Query(None, alias="to"),
+    db: Session = Depends(get_db),
+):
+    """
+    Endpoint para obtener los datos del Cumulative Flow Diagram (CFD).
+    """
+    hoy = datetime.now().date()
+
+    try:
+        to_dt: date = datetime.strptime(to_date, "%Y-%m-%d").date() if to_date else hoy
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Parámetro 'to' inválido, formato YYYY-MM-DD")
+
+    try:
+        from_dt: date = datetime.strptime(from_date, "%Y-%m-%d").date() if from_date else to_dt
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Parámetro 'from' inválido, formato YYYY-MM-DD")
+
+    if from_dt > to_dt:
+        raise HTTPException(status_code=400, detail="'from' no puede ser mayor que 'to'")
+
+    columnas: List[Columna] = (
+        db.query(Columna)
+        .filter(
+            Columna.status == '0',
+            Columna.id_proyecto == id_proyecto
+        )
+        .order_by(Columna.posicion, Columna.id_columna)
+        .all()
+    )
+
+    print(f"📊 CFD - Proyecto {id_proyecto}: {len(columnas)} columnas")
+
+    base_conteos: Dict[str, int] = {str(c.id_columna): 0 for c in columnas}
+
+    tareas_proyecto: List[Tarea] = (
+        db.query(Tarea)
+        .filter(
+            Tarea.id_proyecto == id_proyecto,
+            Tarea.status == '0'
+        )
+        .all()
+    )
+
+    print(f"📋 CFD - Proyecto {id_proyecto}: {len(tareas_proyecto)} tareas")
+
+    data: List[Dict] = []
+    dia_actual = from_dt
+
+    while dia_actual <= to_dt:
+        fin_dia = datetime.combine(dia_actual, datetime.max.time())
+        conteos = dict(base_conteos)
+
+        tareas_en_rango = [
+            t for t in tareas_proyecto
+            if t.created_at is None or t.created_at <= fin_dia
+        ]
+
+        for tarea in tareas_en_rango:
+            movimiento: HistorialMovimiento | None = (
+                db.query(HistorialMovimiento)
+                .filter(
+                    HistorialMovimiento.id_tarea == tarea.id_tarea,
+                    HistorialMovimiento.timestamp <= fin_dia,
+                )
+                .order_by(HistorialMovimiento.timestamp.desc())
+                .first()
+            )
+
+            if movimiento:
+                id_columna_final = movimiento.id_columna_nueva
+            else:
+                id_columna_final = tarea.id_columna
+
+            if id_columna_final is None:
+                continue
+
+            key = str(id_columna_final)
+            if key in conteos:
+                conteos[key] += 1
+
+        data.append({
+            "date": dia_actual.strftime("%Y-%m-%d"),
+            "counts": conteos,
+        })
+
+        dia_actual += timedelta(days=1)
+
+    columns_response = [
+        {"id": c.id_columna, "name": c.nombre} 
+        for c in columnas
+    ]
+
+    print(f"✅ CFD generado: {len(data)} días, {len(columns_response)} columnas")
+
+    return {
+        "proyecto_id": id_proyecto,
+        "from": from_dt.strftime("%Y-%m-%d"),
+        "to": to_dt.strftime("%Y-%m-%d"),
+        "columns": columns_response,
+        "data": data,
     }
