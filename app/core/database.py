@@ -1,4 +1,6 @@
 import os
+import base64
+import tempfile
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
@@ -19,21 +21,39 @@ DATABASE_URL = f"mysql+pymysql://{DB_USERNAME}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}
 # Habilitar SSL/TLS automáticamente si el host contiene 'tidb'.
 # Si se proporciona DB_SSL_CA (ruta o contenido del cert), se usará como CA.
 connect_args = {}
-if 'tidb' in (DB_HOST or '').lower():
-	db_ssl_ca = os.getenv('DB_SSL_CA', '').strip()
-	if db_ssl_ca:
-		# Si DB_SSL_CA apunta a un archivo en el contenedor o contiene PEM, usarlo.
-		connect_args = {"ssl": {"ca": db_ssl_ca}}
-	else:
-		# Activar SSL aunque no se pase CA explícita; en muchos entornos cloud
-		# esto fuerza TLS. En producción es preferible pasar DB_SSL_CA.
-		connect_args = {"ssl": {}}
+
+# SSL/TLS support:
+# - If DB_SSL_CA_B64 is provided, decode PEM to a temp file and use it.
+# - Else, if DB_SSL_CA is provided, use it directly (path to PEM in container).
+# - Else, if host suggests a managed cloud (e.g., contains 'tidb'), enable SSL without CA.
+db_ssl_ca_b64 = os.getenv('DB_SSL_CA_B64', '').strip()
+db_ssl_ca_path = os.getenv('DB_SSL_CA', '').strip()
+
+temp_ca_path = None
+if db_ssl_ca_b64:
+	try:
+		pem_bytes = base64.b64decode(db_ssl_ca_b64)
+		# Write to a secure temporary file. Keep it for the life of the process.
+		tmp = tempfile.NamedTemporaryFile(prefix="db_ca_", suffix=".pem", delete=False)
+		tmp.write(pem_bytes)
+		tmp.flush()
+		tmp.close()
+		temp_ca_path = tmp.name
+		connect_args = {"ssl": {"ca": temp_ca_path}}
+	except Exception:
+		# If decoding fails, fall back to other mechanisms
+		pass
+elif db_ssl_ca_path:
+	connect_args = {"ssl": {"ca": db_ssl_ca_path}}
+elif 'tidb' in (DB_HOST or '').lower():
+	# Enable SSL even without CA to force TLS in many cloud providers
+	connect_args = {"ssl": {}}
 
 # Create engine and session (pasar connect_args si corresponde)
 if connect_args:
-	engine = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args=connect_args)
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args=connect_args)
 else:
-	engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
