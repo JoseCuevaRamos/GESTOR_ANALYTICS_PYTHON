@@ -15,6 +15,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:4200",  # Frontend Angular
         "http://localhost:8000",  # Backend PHP (si es necesario)
+          "*"
     ],
     allow_credentials=True,
     allow_methods=["*"],
