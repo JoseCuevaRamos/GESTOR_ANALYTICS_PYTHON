@@ -12,12 +12,7 @@ app = FastAPI()
 # Configuración de CORS para permitir peticiones desde el frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:4200", 
-         "https://gestion-fronted-wrgn.vercel.app", # Frontend Angular
-        "http://localhost:8000",  # Backend PHP (si es necesario)
-          "*"
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
