@@ -13,7 +13,8 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:4200",  # Frontend Angular
+        "http://localhost:4200", 
+         "https://gestion-fronted-wrgn.vercel.app", # Frontend Angular
         "http://localhost:8000",  # Backend PHP (si es necesario)
           "*"
     ],
